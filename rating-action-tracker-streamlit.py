@@ -1,102 +1,141 @@
+# rating_action_tracker_streamlit.py
+
 import streamlit as st
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
-from dateutil import parser
+import feedparser
+from dateutil import parser as dateparser
+import re
 
-# ---------- Headers to bypass rejections ----------
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-}
+# -----------------------------
+# Utility functions
+# -----------------------------
 
-# ---------- CRISIL ----------
+def extract_rating_change(text):
+    """Detect rating actions in text (upgrade/downgrade + ratings around B/BB/BBB)."""
+    ratings_pattern = r"(B-|B\+?|BB-|BB\+?|BBB-|BBB\+?)"
+    old_new_pattern = rf"({ratings_pattern}).*?({ratings_pattern})"
+
+    action = None
+    old_rating, new_rating = None, None
+
+    text_lower = text.lower()
+    if "upgrade" in text_lower or "revised upwards" in text_lower:
+        action = "Upgrade"
+    elif "downgrade" in text_lower or "revised downwards" in text_lower:
+        action = "Downgrade"
+
+    match = re.search(old_new_pattern, text, re.IGNORECASE)
+    if match:
+        old_rating, new_rating = match.group(1), match.group(2)
+
+    return action, old_rating, new_rating
+
+
+# -----------------------------
+# Agency scrapers (RSS/API)
+# -----------------------------
+
 def fetch_crisil():
-    url = "https://www.crisilratings.com/en/home/our-ratings/latest-rating-press-releases.html"
+    """Fetch latest CRISIL rating press releases from RSS feed."""
+    url = "https://www.crisil.com/en/home/rss/press-releases.rss"
     try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-
+        feed = feedparser.parse(url)
         results = []
-        for item in soup.select("ul.press-release-list li"):
-            title = item.get_text(strip=True)
-            link = item.find("a")["href"] if item.find("a") else None
+        for entry in feed.entries[:30]:
+            action, old_rating, new_rating = extract_rating_change(entry.title + " " + entry.get("summary", ""))
             results.append({
                 "Agency": "CRISIL",
-                "Title": title,
-                "Link": link,
-                "Date": None
+                "Date": dateparser.parse(entry.published).date() if "published" in entry else None,
+                "Title": entry.title,
+                "Link": entry.link,
+                "Action": action,
+                "Old Rating": old_rating,
+                "New Rating": new_rating,
             })
         return results
     except Exception as e:
-        print(f"CRISIL fetch failed: {e}")
+        st.error(f"CRISIL fetch failed: {e}")
         return []
 
-# ---------- CARE ----------
-def fetch_care():
-    url = "https://www.careratings.com/rating-rationale.html"
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
 
+def fetch_care():
+    """Fetch latest CARE Ratings press releases from RSS feed."""
+    url = "https://www.careratings.com/rss-feed-rationale.aspx"
+    try:
+        feed = feedparser.parse(url)
         results = []
-        rows = soup.select("table tbody tr")
-        for row in rows[:20]:  # latest 20 entries
-            cols = row.find_all("td")
-            if len(cols) >= 2:
-                date = cols[0].get_text(strip=True)
-                title = cols[1].get_text(strip=True)
-                link = cols[1].find("a")["href"] if cols[1].find("a") else None
-                results.append({
-                    "Agency": "CARE",
-                    "Title": title,
-                    "Link": link,
-                    "Date": date
-                })
+        for entry in feed.entries[:30]:
+            action, old_rating, new_rating = extract_rating_change(entry.title + " " + entry.get("summary", ""))
+            results.append({
+                "Agency": "CARE",
+                "Date": dateparser.parse(entry.published).date() if "published" in entry else None,
+                "Title": entry.title,
+                "Link": entry.link,
+                "Action": action,
+                "Old Rating": old_rating,
+                "New Rating": new_rating,
+            })
         return results
     except Exception as e:
-        print(f"CARE fetch failed: {e}")
+        st.error(f"CARE fetch failed: {e}")
         return []
 
-# ---------- Placeholder for ICRA ----------
+
 def fetch_icra():
-    st.info("⚠️ ICRA scraping not yet implemented (JS-heavy site)")
+    st.warning("ICRA scraping not yet implemented (JS-heavy site)")
     return []
 
-# ---------- Placeholder for India Ratings ----------
-def fetch_indiaratings():
-    st.info("⚠️ India Ratings scraping not yet implemented (JS-heavy site)")
+
+def fetch_india_ratings():
+    st.warning("India Ratings scraping not yet implemented (JS-heavy site)")
     return []
 
-# ---------- Collect all ----------
-def get_all_data():
-    data = []
-    for func in [fetch_crisil, fetch_care, fetch_icra, fetch_indiaratings]:
-        agency_name = func.__name__.replace("fetch_", "").upper()
-        records = func()
-        print(f"{agency_name}: {len(records)} records fetched")
-        data.extend(records)
-    return pd.DataFrame(data)
 
-# ---------- Streamlit UI ----------
-st.title("📉 Credit Rating Actions Tracker")
-st.write("Tracks rating changes from CRISIL, CARE, ICRA, and India Ratings.")
+# -----------------------------
+# Streamlit App
+# -----------------------------
 
-if st.button("🔄 Refresh Data"):
-    df = get_all_data()
-    if not df.empty:
-        # Parse dates where possible
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        df = df.sort_values(by="Date", ascending=False, na_position="last")
+st.set_page_config(page_title="Ratings Action Tracker", layout="wide")
 
-        st.success(f"✅ {len(df)} total records fetched.")
-        st.dataframe(df)
+st.title("📊 Ratings Action Tracker")
+st.markdown("Track recent **rating upgrades/downgrades** around the B, BB, BBB levels from major Indian rating agencies.")
 
-        # Download option
-        csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download CSV", csv, "ratings.csv", "text/csv")
-    else:
-        st.warning("⚠️ No results found. Try again later.")
+st.sidebar.header("Filters")
+filter_action = st.sidebar.radio("Show only:", ["All", "Upgrades", "Downgrades"])
+if st.sidebar.button("🔄 Refresh"):
+    st.cache_data.clear()
+
+@st.cache_data(ttl=900)  # cache for 15 min
+def load_data():
+    results = []
+    results.extend(fetch_crisil())
+    results.extend(fetch_care())
+    results.extend(fetch_icra())
+    results.extend(fetch_india_ratings())
+    df = pd.DataFrame(results)
+    if not df.empty and "Date" in df.columns:
+        df = df.sort_values(by="Date", ascending=False)
+    return df
+
+df = load_data()
+
+if df.empty:
+    st.warning("⚠️ No results found. Try again later.")
+else:
+    # Apply filters
+    if filter_action != "All":
+        df = df[df["Action"] == filter_action]
+
+    # Highlight ratings
+    def highlight_action(val):
+        if val == "Upgrade":
+            return "color: green; font-weight: bold"
+        elif val == "Downgrade":
+            return "color: red; font-weight: bold"
+        return ""
+
+    st.dataframe(
+        df[["Date", "Agency", "Action", "Old Rating", "New Rating", "Title", "Link"]]
+        .style.applymap(highlight_action, subset=["Action"])
+    )
