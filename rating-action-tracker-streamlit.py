@@ -1,169 +1,102 @@
 import streamlit as st
+import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-import pandas as pd
 from dateutil import parser
 
-st.set_page_config(page_title="Rating Action Tracker", layout="wide")
+# ---------- Headers to bypass rejections ----------
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+}
 
-st.title("📉📈 Rating Action Tracker")
-st.write("Tracks upgrades/downgrades around B / BB / BBB ratings from CRISIL, ICRA, CARE, India Ratings.")
-
-# ---- Helper function for CRISIL ----
+# ---------- CRISIL ----------
 def fetch_crisil():
-    url = "https://www.crisilratings.com/mnt/winshare/Ratings/RatingList.html"
+    url = "https://www.crisilratings.com/en/home/our-ratings/latest-rating-press-releases.html"
     try:
-        r = requests.get(url, timeout=15)
-        if r.status_code != 200:
-            st.warning(f"CRISIL fetch failed: HTTP {r.status_code}")
-            return []
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
-        rows = soup.select("table tr")
 
-        records = []
-        for row in rows[1:]:
-            cols = [c.get_text(strip=True) for c in row.find_all("td")]
-            if len(cols) >= 4:
-                try:
-                    date_val = parser.parse(cols[1], dayfirst=True).date()
-                except:
-                    date_val = None
-                records.append({
-                    "Agency": "CRISIL",
-                    "Entity": cols[0],
-                    "Date": date_val,
-                    "Action": cols[2],
-                    "Rating": cols[3],
-                })
-        st.info(f"✅ CRISIL: {len(records)} records fetched")
-        return records
+        results = []
+        for item in soup.select("ul.press-release-list li"):
+            title = item.get_text(strip=True)
+            link = item.find("a")["href"] if item.find("a") else None
+            results.append({
+                "Agency": "CRISIL",
+                "Title": title,
+                "Link": link,
+                "Date": None
+            })
+        return results
     except Exception as e:
-        st.error(f"CRISIL scraping error: {e}")
+        print(f"CRISIL fetch failed: {e}")
         return []
 
-# ---- Helper function for ICRA ----
-def fetch_icra():
-    url = "https://www.icra.in/Rating/PressReleases"  # public rating actions
-    try:
-        r = requests.get(url, timeout=15)
-        if r.status_code != 200:
-            st.warning(f"ICRA fetch failed: HTTP {r.status_code}")
-            return []
-        soup = BeautifulSoup(r.text, "html.parser")
-        rows = soup.select("table tbody tr")
-
-        records = []
-        for row in rows:
-            cols = [c.get_text(strip=True) for c in row.find_all("td")]
-            if len(cols) >= 3:
-                try:
-                    date_val = parser.parse(cols[0], dayfirst=True).date()
-                except:
-                    date_val = None
-                records.append({
-                    "Agency": "ICRA",
-                    "Entity": cols[1],
-                    "Date": date_val,
-                    "Action": cols[2],
-                    "Rating": cols[2],  # some ICRA pages combine action + rating
-                })
-        st.info(f"✅ ICRA: {len(records)} records fetched")
-        return records
-    except Exception as e:
-        st.error(f"ICRA scraping error: {e}")
-        return []
-
-# ---- Helper function for CARE ----
+# ---------- CARE ----------
 def fetch_care():
-    url = "https://www.careratings.com/pressRelease"  # public disclosures
+    url = "https://www.careratings.com/rating-rationale.html"
     try:
-        r = requests.get(url, timeout=15)
-        if r.status_code != 200:
-            st.warning(f"CARE fetch failed: HTTP {r.status_code}")
-            return []
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
-        rows = soup.select("table tbody tr")
 
-        records = []
-        for row in rows:
-            cols = [c.get_text(strip=True) for c in row.find_all("td")]
-            if len(cols) >= 3:
-                try:
-                    date_val = parser.parse(cols[0], dayfirst=True).date()
-                except:
-                    date_val = None
-                records.append({
+        results = []
+        rows = soup.select("table tbody tr")
+        for row in rows[:20]:  # latest 20 entries
+            cols = row.find_all("td")
+            if len(cols) >= 2:
+                date = cols[0].get_text(strip=True)
+                title = cols[1].get_text(strip=True)
+                link = cols[1].find("a")["href"] if cols[1].find("a") else None
+                results.append({
                     "Agency": "CARE",
-                    "Entity": cols[1],
-                    "Date": date_val,
-                    "Action": cols[2],
-                    "Rating": cols[2],
+                    "Title": title,
+                    "Link": link,
+                    "Date": date
                 })
-        st.info(f"✅ CARE: {len(records)} records fetched")
-        return records
+        return results
     except Exception as e:
-        st.error(f"CARE scraping error: {e}")
+        print(f"CARE fetch failed: {e}")
         return []
 
-# ---- Helper function for India Ratings ----
+# ---------- Placeholder for ICRA ----------
+def fetch_icra():
+    st.info("⚠️ ICRA scraping not yet implemented (JS-heavy site)")
+    return []
+
+# ---------- Placeholder for India Ratings ----------
 def fetch_indiaratings():
-    url = "https://www.indiaratings.co.in/pressrelease"  # public announcements
-    try:
-        r = requests.get(url, timeout=15)
-        if r.status_code != 200:
-            st.warning(f"India Ratings fetch failed: HTTP {r.status_code}")
-            return []
-        soup = BeautifulSoup(r.text, "html.parser")
-        rows = soup.select("table tbody tr")
+    st.info("⚠️ India Ratings scraping not yet implemented (JS-heavy site)")
+    return []
 
-        records = []
-        for row in rows:
-            cols = [c.get_text(strip=True) for c in row.find_all("td")]
-            if len(cols) >= 3:
-                try:
-                    date_val = parser.parse(cols[0], dayfirst=True).date()
-                except:
-                    date_val = None
-                records.append({
-                    "Agency": "India Ratings",
-                    "Entity": cols[1],
-                    "Date": date_val,
-                    "Action": cols[2],
-                    "Rating": cols[2],
-                })
-        st.info(f"✅ India Ratings: {len(records)} records fetched")
-        return records
-    except Exception as e:
-        st.error(f"India Ratings scraping error: {e}")
-        return []
+# ---------- Collect all ----------
+def get_all_data():
+    data = []
+    for func in [fetch_crisil, fetch_care, fetch_icra, fetch_indiaratings]:
+        agency_name = func.__name__.replace("fetch_", "").upper()
+        records = func()
+        print(f"{agency_name}: {len(records)} records fetched")
+        data.extend(records)
+    return pd.DataFrame(data)
 
-# ---- Master fetcher ----
-def fetch_all():
-    all_records = []
-    all_records.extend(fetch_crisil())
-    all_records.extend(fetch_icra())
-    all_records.extend(fetch_care())
-    all_records.extend(fetch_indiaratings())
-    return pd.DataFrame(all_records)
+# ---------- Streamlit UI ----------
+st.title("📉 Credit Rating Actions Tracker")
+st.write("Tracks rating changes from CRISIL, CARE, ICRA, and India Ratings.")
 
-# ---- Refresh button ----
 if st.button("🔄 Refresh Data"):
-    df = fetch_all()
-
+    df = get_all_data()
     if not df.empty:
-        if "Date" in df.columns:
-            df = df.sort_values(by="Date", ascending=False)
+        # Parse dates where possible
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df = df.sort_values(by="Date", ascending=False, na_position="last")
 
-        # Highlight upgrades/downgrades
-        def highlight_action(val):
-            if isinstance(val, str):
-                if "Upgrade" in val:
-                    return "color: green; font-weight: bold"
-                elif "Downgrade" in val:
-                    return "color: red; font-weight: bold"
-            return ""
-        
-        st.dataframe(df.style.applymap(highlight_action, subset=["Action"]))
-        st.download_button("📥 Download CSV", df.to_csv(index=False), "rating_actions.csv")
+        st.success(f"✅ {len(df)} total records fetched.")
+        st.dataframe(df)
+
+        # Download option
+        csv = df.to_csv(index=False).encode("utf-8")
+        st.download_button("📥 Download CSV", csv, "ratings.csv", "text/csv")
     else:
         st.warning("⚠️ No results found. Try again later.")
